@@ -24,7 +24,6 @@
 #include <boost/program_options.hpp>
 #include <boost/scope_exit.hpp>
 
-#include <execution>
 #include "dpc_common.hpp"
 #include "node.hpp"
 
@@ -196,9 +195,9 @@ const auto mktdir = "/home/u172990/prjs/mktgen/mkt";
 const auto maxticks = 2000;
 
 double calculateWtdAvg(const std::vector<double>& wtdPx, const uint_fast64_t wts) {
-  // double sum = std::accumulate(wtdPx.begin(), wtdPx.end(), 0);
+  double sum = std::accumulate(wtdPx.begin(), wtdPx.end(), 0);
   auto policy = oneapi::dpl::execution::dpcpp_default;
-  double sum = std::reduce(wtdPx.begin(), wtdPx.end());
+  //double sum = std::reduce(wtdPx.begin(), wtdPx.end());
   return sum / wts;
 }
 
