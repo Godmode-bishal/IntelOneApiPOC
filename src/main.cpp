@@ -1,9 +1,14 @@
 
 //==============================================================
-// Copyright © 2019 Intel Corporation
+// Copyright Â© 2019 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
 // =============================================================
+
+// oneDPL headers should be included before standard headers
+#include <oneapi/dpl/algorithm>
+#include <oneapi/dpl/execution>
+#include <oneapi/dpl/iterator>
 
 #include <chrono>
 #include <iomanip>
@@ -11,6 +16,7 @@
 #include <CL/sycl.hpp>
 #include <fstream>
 #include <experimental/filesystem>
+#include <numeric>
 
 // boost
 #include <boost/assert.hpp>
@@ -18,6 +24,7 @@
 #include <boost/program_options.hpp>
 #include <boost/scope_exit.hpp>
 
+#include <execution>
 #include "dpc_common.hpp"
 #include "node.hpp"
 
@@ -141,6 +148,11 @@ void ShowDevice(queue &q) {
   cout << std::setw(20) << "Max Compute Units: " << max_compute_units << "\n";
 }
 
+int getMaxComputeUnits(queue& q) {
+  auto device = q.get_device();
+  return device.get_info<info::device::max_compute_units>();
+}
+
 FileId initialize(const std::string& path) {
     // NULL FileId placeholder
     symFileList.emplace_back(""); 
@@ -181,6 +193,36 @@ void Usage(string program_name) {
 }
 
 const auto mktdir = "/home/u172990/prjs/mktgen/mkt";
+const auto maxticks = 2000;
+
+double calculateWtdAvg(const std::vector<double>& wtdPx, const uint_fast64_t wts) {
+  // double sum = std::accumulate(wtdPx.begin(), wtdPx.end(), 0);
+  auto policy = oneapi::dpl::execution::dpcpp_default;
+  double sum = std::reduce(wtdPx.begin(), wtdPx.end());
+  return sum / wts;
+}
+
+void Process(queue& q, const std::string& path, std::vector<double>& avgWtdPx) {
+    const FileId MAX_FILEID = initialize(path);
+    avgWtdPx.reserve(MAX_FILEID);
+
+    std::vector<double> wtdPx;
+    wtdPx.reserve(maxticks); // @TODO num of lines?
+    uint_fast64_t wts = 0;
+    NodePtr nd = std::make_shared<Node>();
+    
+    for (auto i = 1; i < MAX_FILEID; ++i) {
+      int cnt = 0;
+      while (fileHandles[i]->getNextNode(nd) && (++cnt < maxticks)) {
+	wtdPx.emplace_back(nd->m_sz * nd->m_px);
+	wts += nd->m_sz;
+      }
+      //      std::cout << "Symbol [" << Symbol[i] << "] weighted avg [" << calculateWtdAvg(wtdPx, wts) << "]" << std::endl;
+      avgWtdPx.emplace_back(calculateWtdAvg(wtdPx, wts));
+      wtdPx.clear();
+      wts = 0;
+    }
+}
 
 int main(int argc, char *argv[]) {
   if (argc != 1) {
@@ -199,7 +241,19 @@ int main(int argc, char *argv[]) {
     // Display the device info
     ShowDevice(q);
     // launch the body of the application
-    Execute(q);
+    //Execute(q);
+
+    std::vector<double> avgWtdPx;
+    dpc_common::MyTimer t_ser;
+    Process(q, mktdir, avgWtdPx);
+    dpc_common::Duration serial_time = t_ser.elapsed();
+
+    std::cout << avgWtdPx.size() << std::endl;
+    // Report the results
+    std::cout << std::setw(20) << "serial time: " << serial_time.count() << "s\n";
+    for (int i = 0; i < avgWtdPx.size(); ++i) {
+      std::cout << "Symbol [" << symbols[i + 1] << "] weighted avg [" << avgWtdPx[i] << "]" << std::endl;
+    }
   } catch (...) {
     // some other exception detected
     cout << "Failure\n";
