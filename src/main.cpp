@@ -9,11 +9,122 @@
 #include <iomanip>
 #include <iostream>
 #include <CL/sycl.hpp>
+#include <fstream>
+#include <experimental/filesystem>
+
+// boost
+#include <boost/assert.hpp>
+#include <boost/algorithm/string.hpp>
+#include <boost/program_options.hpp>
+#include <boost/scope_exit.hpp>
 
 #include "dpc_common.hpp"
+#include "node.hpp"
 
 using namespace std;
 using namespace cl::sycl;
+using namespace node;
+
+namespace fs = std::experimental::filesystem;
+namespace po = boost::program_options;
+
+SymbolFiles symFileList;
+Symbols symbols;
+std::unordered_map<std::string, FileId> fileIdMap;
+
+std::ostream& operator<<(std::ostream& ostr, Node& nd) {
+    auto tm = nd.m_tm / 1000;
+    auto millis = nd.m_tm % 1000;
+    std::tm ptm = *std::localtime(&tm);
+    char dt[64], buffer[32];
+    std::strftime(buffer, 32, "%Y-%m-%d %H:%M:%S", &ptm);
+    snprintf(dt, 64, "%s.%03ld", buffer, millis);
+    ostr << symbols[nd.m_fId] << "," << dt << "," << nd.m_px << "," << nd.m_sz << "," << nd.m_exch << "," << getTypeStr(nd.m_type);
+    return ostr;
+}
+
+class FileHandler {
+private:
+    std::ifstream m_ifs;
+    FileId m_fId = 0;
+
+    uint_fast64_t getMillis(const std::string& tm) {
+	auto indx = tm.find_last_of(".");
+	if (indx == std::string::npos) return 0;
+	return std::stoll(tm.substr(indx + 1));
+    }
+
+public:
+    ~FileHandler() { m_ifs.close(); }
+    FileHandler(const std::string& fname, const FileId fId):m_fId(fId) {
+	// std::cout << "Opening " << fname << std::endl;
+	m_ifs.open(fname);
+    }
+
+    NodePtr getNextNode() {
+	if (not m_ifs.good()) return nullptr;
+	std::string line;
+	while(std::getline(m_ifs, line)) {
+	    boost::algorithm::trim(line);
+	    if (std::empty(line)) continue;
+	    if (boost::algorithm::starts_with(line, "#")) continue;
+	    if (boost::algorithm::starts_with(line, "//")) continue;
+
+	    std::vector<std::string> args;
+	    boost::split(args, line, boost::is_any_of(","));
+	    BOOST_ASSERT(args.size() == 5);
+
+	    auto node = std::make_shared<Node>();
+	    std::tm mkTm = {};
+	    strptime(args[0].c_str(), "%Y-%m-%d %H:%M:%S", &mkTm);
+
+	    node->m_tm = (std::mktime(&mkTm) * 1000) + getMillis(args[0]);
+	    node->m_px = std::stod(args[1]);
+	    node->m_sz = std::stoll(args[2]);
+	    node->m_exch = args[3];
+	    node->m_type = getType(args[4]);
+	    node->m_fId = m_fId;
+	    return node;
+	}
+	return nullptr;
+    }
+
+    bool getNextNode(NodePtr& node) {
+	if (not m_ifs.good()) return false;
+	std::string line;
+	while(std::getline(m_ifs, line)) {
+	    boost::algorithm::trim(line);
+	    if (std::empty(line)) continue;
+	    if (boost::algorithm::starts_with(line, "#")) continue;
+	    if (boost::algorithm::starts_with(line, "//")) continue;
+
+	    std::vector<std::string> args;
+	    boost::split(args, line, boost::is_any_of(","));
+	    BOOST_ASSERT(args.size() == 5);
+
+	    std::tm mkTm = {};
+	    strptime(args[0].c_str(), "%Y-%m-%d %H:%M:%S", &mkTm);
+
+	    node->m_tm = (std::mktime(&mkTm) * 1000) + getMillis(args[0]);
+	    node->m_px = std::stod(args[1]);
+	    node->m_sz = std::stoll(args[2]);
+	    node->m_exch = args[3];
+	    node->m_type = getType(args[4]);
+	    node->m_fId = m_fId;
+	    return true;
+	}
+	return false;
+    }
+
+};
+
+std::vector<std::unique_ptr<FileHandler>> fileHandles;
+
+std::string getSymbol(const std::string& fname) {
+    auto index = fname.find_last_of(".");
+    if (std::string::npos == index) return fname;
+    return fname.substr(0, index);
+}
 
 void ShowDevice(queue &q) {
   // Output platform and device information.
@@ -30,6 +141,33 @@ void ShowDevice(queue &q) {
   cout << std::setw(20) << "Max Compute Units: " << max_compute_units << "\n";
 }
 
+FileId initialize(const std::string& path) {
+    // NULL FileId placeholder
+    symFileList.emplace_back(""); 
+    symbols.emplace_back("");
+    fileHandles.emplace_back(nullptr);
+    FileId fId = NULL_FILEID;
+    for (const auto & entry : fs::directory_iterator(path)) {
+	if (fs::is_regular_file(entry) && entry.path().extension() == ".txt") {
+	    const auto sym = getSymbol(entry.path().filename());
+	    symFileList.emplace_back(entry.path());
+	    symbols.emplace_back(sym);
+	    fileIdMap.emplace(entry.path(), ++fId);
+	    fileHandles.emplace_back(std::make_unique<FileHandler>(entry.path(), fId));
+	}
+    }
+    const FileId MAX_FILEID = ++fId;
+    BOOST_ASSERT(symbols.size() == MAX_FILEID);
+
+    int j = 0;
+    for (const auto& i : fileIdMap) {
+	BOOST_ASSERT(i.first == symFileList[i.second]);
+    }
+
+    std::cout << "MAX FILE ID " << MAX_FILEID << std::endl;
+    return MAX_FILEID;
+}
+
 void Execute(queue &q) {
   // run our work loads here (calculate running average of the tick prices for the stock
 }
@@ -41,6 +179,8 @@ void Usage(string program_name) {
   cout << program_name << "\n\n";
   exit(-1);
 }
+
+const auto mktdir = "/home/u172990/prjs/mktgen/mkt";
 
 int main(int argc, char *argv[]) {
   if (argc != 1) {
@@ -54,7 +194,7 @@ int main(int argc, char *argv[]) {
       
     // Default queue, set accelerator choice above.
     //queue q (default_selector{},dpc_common::exception_handler);
-    queue q (gpu_selector{},dpc_common::exception_handler);
+    queue q (default_selector{},dpc_common::exception_handler);
     //queue q (accelerator_selector{},dpc_common::exception_handler);
     // Display the device info
     ShowDevice(q);
