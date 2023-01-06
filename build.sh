@@ -1,5 +1,6 @@
 #!/bin/bash
 source /opt/intel/inteloneapi/setvars.sh
+cd /home/u172990/prjs/IntelOneApiPOC
 if [ $# -ne 1 ]
 then
     rm -rf build

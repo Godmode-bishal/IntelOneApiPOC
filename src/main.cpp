@@ -193,7 +193,7 @@ void Usage(string program_name) {
 const auto mktdir = "/home/u172990/prjs/mktgen/mkt";
 const auto maxticks = 2000;
 
-double calculateWtdAvg(const std::vector<double>& wtdPx, const uint_fast64_t wts) {
+double calculateWtdAvg(const std::vector<uint_fast64_t>& wtdPx, const uint_fast64_t wts) {
   //double sum = std::accumulate(wtdPx.begin(), wtdPx.end(), 0);
   auto policy = oneapi::dpl::execution::dpcpp_default;
   double sum = std::reduce(policy, wtdPx.begin(), wtdPx.end());
@@ -204,7 +204,7 @@ void Process(queue& q, const std::string& path, std::vector<double>& avgWtdPx) {
     const FileId MAX_FILEID = initialize(path);
     avgWtdPx.reserve(MAX_FILEID);
 
-    std::vector<double> wtdPx;
+    std::vector<uint_fast64_t> wtdPx;
     wtdPx.reserve(maxticks); // @TODO num of lines?
     uint_fast64_t wts = 0;
     NodePtr nd = std::make_shared<Node>();
