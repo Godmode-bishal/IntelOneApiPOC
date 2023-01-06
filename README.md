@@ -17,3 +17,5 @@ qsub -I -l nodes=1:iris_xe_max:ppn=2 -d .
 
 
 More information on https://devcloud.intel.com/oneapi/documentation/job-submission/
+
+PS: Will only build on XEON node with latest 9.4 version GCC. use node : qsub -I -l nodes=1:xeon:ppn=2 -d . for building the code.
